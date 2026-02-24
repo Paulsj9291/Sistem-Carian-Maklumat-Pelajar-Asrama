@@ -1,47 +1,33 @@
 import streamlit as st
 import pandas as pd
+from streamlit_gsheets import GSheetsConnection
 import io
 import os
 import json
 import urllib.parse
 from fpdf import FPDF
 from datetime import datetime, date
-from PIL import Image
 
-# --- 1. KONFIGURASI FAIL & KESELAMATAN ---
+# --- 1. SAMBUNGAN GOOGLE SHEETS ---
+# Pastikan anda telah setup 'Secrets' di Streamlit Cloud
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+def load_data(sheet_name, columns):
+    try:
+        return conn.read(worksheet=sheet_name, ttl=0)
+    except:
+        return pd.DataFrame(columns=columns)
+
+def save_data(df, sheet_name):
+    conn.update(worksheet=sheet_name, data=df)
+    st.cache_data.clear()
+
+# --- 2. KESELAMATAN & SETTINGS ---
 USER_CREDENTIALS = {"admin": "cikgu123", "staf": "skbn2025"}
-FILES = {
-    "asrama": "data_asrama.csv",
-    "kehadiran": "data_kehadiran.csv",
-    "cuti": "data_cuti.csv",
-    "inventori": "data_inventori.csv",
-    "settings": "settings.json"
-}
-
-# Inisialisasi fail jika belum wujud
-for f_key, f_path in FILES.items():
-    if not os.path.exists(f_path):
-        if f_key == "settings":
-            with open(f_path, 'w') as f:
-                json.dump({
-                    "school_name": "SEKOLAH KEBANGSAAN BATU NIAH",
-                    "school_logo": None,
-                    "staff": {}
-                }, f)
-        else:
-            pd.DataFrame().to_csv(f_path, index=False)
-
-def load_settings():
-    with open(FILES["settings"], 'r') as f:
-        return json.load(f)
-
-def save_settings(s):
-    with open(FILES["settings"], 'w') as f:
-        json.dump(s, f)
 
 def check_password():
     if "password_correct" not in st.session_state:
-        st.title("🔒 Log Masuk Sistem SKBN v9.0")
+        st.title("🔒 Log Masuk Sistem SKBN Online")
         u = st.text_input("Nama Pengguna")
         p = st.text_input("Kata Laluan", type="password")
         if st.button("Masuk"):
@@ -52,156 +38,60 @@ def check_password():
         return False
     return True
 
-# --- 2. FUNGSI PDF DINAMIK ---
+# --- 3. PENJANA PDF ---
 class PDF(FPDF):
     def header(self):
-        settings = load_settings()
-        if settings.get("school_logo") and os.path.exists(settings["school_logo"]):
-            self.image(settings["school_logo"], 10, 8, 20)
-        
+        settings = load_data("Settings", ["Key", "Value"])
+        school_name = settings[settings['Key'] == 'school_name']['Value'].values[0] if not settings.empty else "SK BATU NIAH"
         self.set_font('Arial', 'B', 12)
-        self.cell(30) # Space for logo
-        self.cell(0, 5, settings.get("school_name", "NAMA SEKOLAH"), ln=True, align='L')
-        self.set_font('Arial', '', 10)
-        self.cell(30)
-        self.cell(0, 5, 'D/A PEJABAT PENDIDIKAN DAERAH SUBIS', ln=True, align='L')
-        self.cell(30)
-        self.cell(0, 5, '98150 BEKENU, SARAWAK', ln=True, align='L')
-        self.line(10, 32, 200, 32)
+        self.cell(0, 5, school_name, ln=True, align='C')
+        self.line(10, 25, 200, 25)
         self.ln(10)
 
-def generate_offer_letter(row):
-    settings = load_settings()
-    pdf = PDF()
-    pdf.add_page()
-    pdf.set_font('Arial', '', 11)
-    
-    # Rujukan & Tarikh
-    pdf.cell(0, 10, f"Ruj. Kami: SKBN.T.700-10/2/1 ({row.name})", ln=True, align='R')
-    pdf.cell(0, 5, f"Tarikh: {datetime.now().strftime('%d %B %Y')}", ln=True, align='R')
-    pdf.ln(5)
-    
-    # Nama Pelajar
-    pdf.set_font('Arial', 'B', 11)
-    nama_p = str(row.get('Nama', 'PELAJAR')).upper()
-    pdf.cell(0, 5, nama_p, ln=True)
-    pdf.set_font('Arial', '', 11)
-    pdf.cell(0, 5, "Niah, Sarawak.", ln=True)
-    pdf.ln(10)
-    
-    pdf.set_font('Arial', 'B', 11)
-    pdf.multi_cell(0, 5, "TAWARAN MASUK KE ASRAMA BAGI SESI TAHUN 2025-2026")
-    pdf.ln(5)
-    
-    pdf.set_font('Arial', '', 11)
-    text = f"Sukacita dimaklumkan bahawa anak jagaan tuan, {nama_p} telah ditawarkan menduduki asrama bagi sesi 2025."
-    pdf.multi_cell(0, 6, text)
-    pdf.ln(15)
-    
-    # Tandatangan Guru Besar Dinamik
-    gb = settings["staff"].get("Guru Besar", {"nama": "....................", "gred": ""})
-    pdf.set_font('Arial', 'B', 11)
-    pdf.cell(0, 5, f"({gb['nama'].upper()})", ln=True)
-    pdf.cell(0, 5, f"Guru Besar {gb.get('gred', '')}", ln=True)
-    pdf.cell(0, 5, settings["school_name"], ln=True)
-    
-    return pdf.output()
-
-# --- 3. UI APLIKASI ---
-st.set_page_config(page_title="Sistem Pengurusan Pelajar Pro", layout="wide")
+# --- 4. UI UTAMA ---
+st.set_page_config(page_title="Sistem SKBN Online", layout="wide")
 
 if check_password():
-    settings = load_settings()
-    data_asrama = pd.read_csv(FILES["asrama"])
+    # Load Semua Data dari Google Sheets
+    df_asrama = load_data("Data_Asrama", ["Nama", "Kelas", "No. KP", "Bangsa", "Agama"])
+    df_kehadiran = load_data("Rekod_Kehadiran", ["Tarikh", "Nama", "Hadir", "Sebab"])
+    df_inventori = load_data("Inventori", ["Barang", "Kuantiti", "Status"])
     
-    with st.sidebar:
-        if settings.get("school_logo") and os.path.exists(settings["school_logo"]):
-            st.image(settings["school_logo"], width=100)
-        st.title(settings["school_name"])
-        if st.button("🚪 Log Keluar"):
-            st.session_state.clear()
-            st.rerun()
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 Daftar", "🏠 Asrama", "📅 Kehadiran", "📦 Inventori", "⚙️ Tetapan"])
 
-    tabs = st.tabs(["🔍 Pendaftaran", "🏠 Maklumat Asrama", "📅 Kehadiran", "📦 Inventori", "⚙️ Tetapan"])
+    with tab1:
+        st.subheader("Pendaftaran Pelajar")
+        file = st.file_uploader("Upload Excel Pelajar", type=["xlsx"])
+        if file:
+            raw_df = pd.read_excel(file)
+            st.dataframe(raw_df.head(5))
+            sel_idx = st.selectbox("Pilih Pelajar:", raw_df.index, format_func=lambda x: str(raw_df.loc[x, raw_df.columns[0]]))
+            if st.button("Daftar ke Google Sheets"):
+                new_row = raw_df.loc[[sel_idx]]
+                df_asrama = pd.concat([df_asrama, new_row]).drop_duplicates()
+                save_data(df_asrama, "Data_Asrama")
+                st.success("Telah disimpan ke Google Sheets!")
 
-    # --- TAB TETAPAN (FUNGSI BARU) ---
-    with tabs[4]:
-        st.subheader("⚙️ Tetapan Sekolah & Pengurusan Staf")
-        
-        col_s1, col_s2 = st.columns(2)
-        
-        with col_s1:
-            st.write("### 🏫 Maklumat Sekolah")
-            new_name = st.text_input("Nama Sekolah", value=settings["school_name"])
-            logo_file = st.file_uploader("Muat Naik Logo Sekolah (PNG/JPG)", type=["png", "jpg", "jpeg"])
-            
-            if st.button("Simpan Maklumat Sekolah"):
-                settings["school_name"] = new_name
-                if logo_file:
-                    logo_path = f"logo_{logo_file.name}"
-                    with open(logo_path, "wb") as f:
-                        f.write(logo_file.getbuffer())
-                    settings["school_logo"] = logo_path
-                save_settings(settings)
-                st.success("Maklumat sekolah dikemaskini!")
-                st.rerun()
+    with tab3:
+        st.subheader("Kehadiran Harian")
+        sel_date = st.date_input("Tarikh", value=date.today())
+        if not df_asrama.empty:
+            with st.form("att_form"):
+                updates = []
+                for _, r in df_asrama.iterrows():
+                    c1, c2 = st.columns([3, 1])
+                    h = c2.checkbox("Hadir", value=True, key=f"h_{r.name}")
+                    updates.append({"Tarikh": str(sel_date), "Nama": r['Nama'], "Hadir": 1 if h else 0})
+                if st.form_submit_button("Hantar Kehadiran"):
+                    new_att = pd.DataFrame(updates)
+                    df_kehadiran = pd.concat([df_kehadiran, new_att])
+                    save_data(df_kehadiran, "Rekod_Kehadiran")
+                    st.success("Kehadiran dikemaskini di Google Sheets!")
 
-        with col_s2:
-            st.write("### 👤 Pengurusan Pegawai Pentadbiran")
-            jawatan_list = [
-                "Guru Besar", "PK Pentadbiran", "PK HEM", "PK Kokurikulum", 
-                "PK Pendidikan Khas", "Pembantu Tadbir Asrama"
-            ]
-            
-            sel_jawatan = st.selectbox("Pilih Jawatan untuk Diedit:", jawatan_list)
-            
-            with st.form(f"form_{sel_jawatan}"):
-                curr = settings["staff"].get(sel_jawatan, {"nama": "", "gred": ""})
-                n_nama = st.text_input("Nama Pegawai", value=curr["nama"])
-                n_gred = st.text_input("Gred (cth: DG44)", value=curr["gred"])
-                if st.form_submit_button("Simpan Pegawai"):
-                    settings["staff"][sel_jawatan] = {"nama": n_nama, "gred": n_gred}
-                    save_settings(settings)
-                    st.success(f"Rekod {sel_jawatan} dikemaskini!")
-
-        st.divider()
-        col_st1, col_st2 = st.columns(2)
-        
-        with col_st1:
-            st.write("### 🏠 Warden Asrama (Maksimum 3)")
-            for i in range(1, 4):
-                key = f"Warden {i}"
-                curr = settings["staff"].get(key, {"nama": "", "gred": ""})
-                with st.expander(f"Warden {i}: {curr['nama']}"):
-                    w_nama = st.text_input(f"Nama Warden {i}", value=curr["nama"], key=f"wn_{i}")
-                    w_gred = st.text_input(f"Gred Warden {i}", value=curr["gred"], key=f"wg_{i}")
-                    if st.button(f"Simpan Warden {i}"):
-                        settings["staff"][key] = {"nama": w_nama, "gred": w_gred}
-                        save_settings(settings)
-                        st.rerun()
-
-        with col_st2:
-            st.write("### 🧑‍🤝‍🧑 PPM Asrama (Maksimum 2)")
-            for i in range(1, 3):
-                key = f"PPM Asrama {i}"
-                curr = settings["staff"].get(key, {"nama": "", "gred": ""})
-                with st.expander(f"PPM {i}: {curr['nama']}"):
-                    p_nama = st.text_input(f"Nama PPM {i}", value=curr["nama"], key=f"pn_{i}")
-                    p_gred = st.text_input(f"Gred PPM {i}", value=curr["gred"], key=f"pg_{i}")
-                    if st.button(f"Simpan PPM {i}"):
-                        settings["staff"][key] = {"nama": p_nama, "gred": p_gred}
-                        save_settings(settings)
-                        st.rerun()
-
-    # --- TAB LAIN (Kekalkan fungsi sedia ada dari v8.0) ---
-    with tabs[1]:
-        st.subheader("🏠 Maklumat Pelajar Asrama")
-        if not data_asrama.empty:
-            st.dataframe(data_asrama, use_container_width=True)
-            sel_p = st.selectbox("Pilih Pelajar untuk Surat PDF:", data_asrama.index, format_func=lambda x: str(data_asrama.loc[x, data_asrama.columns[0]]))
-            if st.button("Jana Surat Tawaran PDF"):
-                pdf_bytes = generate_offer_letter(data_asrama.loc[sel_p])
-                st.download_button("Muat Turun Surat", pdf_bytes, f"Surat_{data_asrama.loc[sel_p].iloc[0]}.pdf", "application/pdf")
-        else: st.info("Tiada data.")
-
-    # (Nota: Tab Pendaftaran, Kehadiran, dan Inventori kekal seperti kod v8.0 sebelumnya)
+    with tab5:
+        st.subheader("Tetapan Sekolah")
+        s_name = st.text_input("Nama Sekolah", value="SEKOLAH KEBANGSAAN BATU NIAH")
+        if st.button("Simpan Tetapan"):
+            set_df = pd.DataFrame([{"Key": "school_name", "Value": s_name}])
+            save_data(set_df, "Settings")
+            st.success("Tetapan disimpan!")
