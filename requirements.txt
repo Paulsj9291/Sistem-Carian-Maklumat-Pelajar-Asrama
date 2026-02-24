@@ -1,0 +1,6 @@
+streamlit
+pandas
+openpyxl
+xlsxwriter
+fpdf2
+st-gsheets-connection
